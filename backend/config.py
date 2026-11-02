@@ -20,12 +20,12 @@ class CompletionSettings:
     smart_cpu_count: int = 1
     smart_audio_seconds: float = 8.0
     minimum_silence: float = 1.0
-    # Silence only starts a confirmation prompt; it never grades by itself.
-    completion_timeout: float = 5.0
-    maximum_timeout: float = 5.0
+    # Preserve multi-second gaps between individually spoken letters.
+    completion_timeout: float = 10.0
+    maximum_timeout: float = 12.0
     stt_final_wait: float = 2.5
     pause_margin: float = 0.6
-    adaptive_maximum: float = 4.0
+    adaptive_maximum: float = 20.0
     debug: bool = False
 
     def __post_init__(self):
@@ -48,10 +48,10 @@ COMPLETION = CompletionSettings(
     smart_cpu_count=int(os.getenv("SMART_TURN_CPU_COUNT", "1")),
     smart_audio_seconds=float(os.getenv("SMART_TURN_AUDIO_SECS", "8")),
     minimum_silence=float(os.getenv("SPELLING_MIN_SILENCE_SECS", "1")),
-    completion_timeout=float(os.getenv("SPELLING_COMPLETION_SECS", "5.0")),
-    maximum_timeout=float(os.getenv("SPELLING_MAX_COMPLETION_SECS", "5.0")),
+    completion_timeout=float(os.getenv("SPELLING_COMPLETION_SECS", "10.0")),
+    maximum_timeout=float(os.getenv("SPELLING_MAX_COMPLETION_SECS", "12.0")),
     stt_final_wait=float(os.getenv("STT_FINAL_WAIT_SECS", "2.5")),
     pause_margin=float(os.getenv("SPELLING_PAUSE_MARGIN_SECS", "0.6")),
-    adaptive_maximum=float(os.getenv("SPELLING_ADAPTIVE_MAX_SECS", "4")),
+    adaptive_maximum=float(os.getenv("SPELLING_ADAPTIVE_MAX_SECS", "20")),
     debug=os.getenv("SPELLING_DEBUG", "false").lower() == "true",
 )

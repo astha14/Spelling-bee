@@ -50,10 +50,8 @@ Host: Hi, Alex! Choose easy mode, medium mode, or hard mode.
 You: Easy mode.
 Host: [speaks a word; spelling stays hidden]
 You: [spell individual letters, with pauses if needed]
-You: [pause when finished; confirm when asked]
-Host: [after a quiet spell, asks whether that is your final spelling]
-You: Yes.
-Host: [grades the submitted spelling and moves to the next word]
+You: [pause when finished]
+Host: [after a sustained pause, grades the answer and moves to the next word]
 ```
 
 The ten predefined words in each difficulty are shuffled without repetition.
@@ -106,8 +104,8 @@ status. Only final Cartesia STT segments add letters; revised interim hypotheses
 mark recognition as pending but never append to the answer.
 
 The contest state machine is preserved. The per-attempt completion controller
-adds `WAITING_FOR_WORD → LISTENING → POSSIBLY_COMPLETE`; elapsed silence asks the
-player to confirm and does not transition to validation.
+adds `WAITING_FOR_WORD → LISTENING → POSSIBLY_COMPLETE → VALIDATING → FEEDBACK`;
+a sustained silence grades the accumulated letters automatically.
 It waits for host playback to finish before listening. A fresh VAD speech start
 is required before collecting letters, which also rejects late transcripts after
 feedback when no new player speech has begun. Existing letters retained after a
@@ -115,10 +113,10 @@ Letters remain available after a hint or correction. A fresh silence window
 starts after the host response, so playback never consumes time to continue.
 
 Smart Turn V3 analyzes a bounded audio snapshot in the background. Its prediction
-is only a hint. The default silence window is **5 seconds**; it only prompts the
-player to confirm or continue. Observed pauses between segments can extend the
-window: longest observed pause plus 0.6 seconds, up to the configured adaptive
-allowance. Pace is retained across words in one session. Silence is measured
+is only a hint. The default completion window is **10 seconds** with positive
+Smart Turn, or **12 seconds** on fallback. Observed pauses between segments can
+extend the window: longest observed pause plus 0.6 seconds, up to the configured
+20-second adaptive cap. Pace is retained across words in one session. Silence is measured
 from the end of speech, accounting for the VAD stop delay. Neither answer nor
 expected word length affects recognition or completion.
 
@@ -126,14 +124,14 @@ One cancellable asyncio timer owns completion. Resumed speech cancels it and
 invalidates old turn predictions. The timer checks the attempt ID and generation
 again under the same lock used by speech events before claiming an answer exactly
 once. Each new word or retry gets a new attempt ID. VAD stops and Smart Turn
-predictions cannot independently submit.
+predictions cannot independently submit before the silence threshold.
 
 If recognition is still pending, the controller allows up to **2.5 additional
-seconds** beyond the applicable silence threshold (4.5 seconds on the base positive
-Smart Turn path, 5 seconds on the base fallback path; longer with adaptive pacing). A final result arriving in that
-grace period can be graded immediately if silence is already sufficient. If a
-final never arrives, the host requests a retry instead of grading an incomplete
-prefix. Empty attempts never receive a grade.
+seconds** beyond the applicable silence threshold (12.5 seconds on the positive
+Smart Turn path, 14.5 seconds on fallback; longer with adaptive pacing). A final
+result arriving in that grace period can be graded if silence is already
+sufficient. If a final never arrives, the host requests a retry. Empty attempts
+never receive a grade.
 
 Automatic completion calls the same Python validation/scoring function as the
 existing manual confirmation path, then speaks feedback and the next word.
@@ -248,17 +246,17 @@ after changing settings. No new dependencies or provider services were added.
 | `SMART_TURN_CPU_COUNT` | `1` | ONNX inference CPU threads |
 | `SMART_TURN_AUDIO_SECS` | `8` | Maximum recent audio supplied to the analyzer |
 | `SPELLING_MIN_SILENCE_SECS` | `1.0` | Lower bound on either completion timeout |
-| `SPELLING_COMPLETION_SECS` | `5.0` | Silence before asking whether the answer is final |
-| `SPELLING_MAX_COMPLETION_SECS` | `5.0` | Silence fallback if Smart Turn is incomplete, absent or unavailable |
+| `SPELLING_COMPLETION_SECS` | `10.0` | Silence before automatic grading with a positive Smart Turn result |
+| `SPELLING_MAX_COMPLETION_SECS` | `12.0` | Silence fallback if Smart Turn is incomplete, absent or unavailable |
 | `SPELLING_PAUSE_MARGIN_SECS` | `0.6` | Extra silence beyond the longest observed pause |
-| `SPELLING_ADAPTIVE_MAX_SECS` | `4.0` | Cap on the learned pause allowance; does not reduce configured base timeouts |
+| `SPELLING_ADAPTIVE_MAX_SECS` | `20.0` | Cap on the learned pause allowance; does not reduce configured base timeouts |
 | `STT_FINAL_WAIT_SECS` | `2.5` | Extra bounded grace for a pending final transcript |
 | `SPELLING_DEBUG` | `false` | Log VAD, prediction, timer, recognized-letter and validation events |
 
 For players who pause longer, increase both completion values. If finals arrive late, try
 `STT_FINAL_WAIT_SECS=3.0`. Keep minimum <= default <= maximum. Do not lower the
-minimum to compensate for slow transcription. The silence timeout cannot grade an
-answer; only an explicit confirmation submits it. Adaptive pacing can extend it.
+minimum to compensate for slow transcription. Any VAD speech start cancels and
+resets the timer, and observed long pauses extend later windows.
 Pending-STT grace and provider TTS latency are additional.
 
 With `SPELLING_DEBUG=true`, terminal logs include player-recognized letters and
@@ -316,9 +314,9 @@ After updating, restart the server and refresh the tab with Ctrl+Shift+R.
 Delayed final transcripts queued within the same attempt survive a new VAD speech
 segment; bot playback and new attempts still invalidate queued transcripts.
 This fixes a race that could discard letters across pauses, but does not recover
-letters that Cartesia never transcribes. A five-second silence window now asks for
-confirmation, and the answer buffer remains open to corrections and continued
-spelling. Your `.env` values are updated without changing API credentials. Feedback no longer waits for an extra LLM request, and the
+letters that Cartesia never transcribes. The completion window is now 10 seconds
+with positive Smart Turn or 12 seconds on fallback; it resets on speech and adapts
+to observed pauses. Your `.env` values are updated without changing API credentials. Feedback no longer waits for an extra LLM request, and the
 practice message has been removed. Live microphone accuracy still needs testing.
 
 
@@ -394,9 +392,9 @@ fixtures for A, B, C, E, G, P, T and Z; they do not establish how accurately Car
 hears a real microphone. Live checks should spell APPLE continuously, as AP / PL /
 E, and as A / P / P / L / E, then try an incorrect spelling and a delayed final.
 
-The supplied five-second silence window is a prompt threshold, not a grading
-threshold. Increase it for longer pauses; explicit confirmation is always required
-before grading. If logs show missing letters at the provider, use `P for papa` to
+The supplied 10/12-second thresholds grade automatically after sustained
+silence. Increase them for longer pauses; any VAD speech start cancels and resets
+the timer. If logs show missing letters at the provider, use `P for papa` to
 clarify; do not shorten timers to compensate for missing STT results. A model
 comparison would be a separate measured change, not an automatic provider switch.
 
@@ -458,19 +456,19 @@ the host asks a short clarification and preserves the game.
 **Pause tests:** synthetic final transcripts, worst-case positive Smart Turn at
 every pause, including 0.08 seconds of VAD-start delay:
 
-| Between-letter pause | Previous 2.0 / 2.5 seconds | Current 5-second confirmation prompt |
+| Between-letter pause | Previous 2.0 / 2.5 seconds | Current 10 / 12-second automatic completion |
 | --- | --- | --- |
 | 0.5 seconds | Complete FROG retained | Complete FROG retained |
 | 1 second | Complete FROG retained | Complete FROG retained |
 | 2 seconds | First pause could submit early | Complete FROG retained |
 | 3 seconds | First pause could submit early | Complete FROG retained |
 
-The silence timeout now asks whether the spelling is final; it never submits. A
-player can continue after the prompt, and the buffer remains intact. The provider
+No confirmation prompt is spoken during normal play. Speech activity cancels the
+completion timer and preserves earlier letters. The provider
 can still omit or mishear an acoustic letter, which needs live audio evaluation.
 
-The repeat local real-clock benchmark measured 2501.1 → 2002.2 ms on the positive
-Smart Turn path, and 4001.8 → 2501.0 ms on fallback. These compare historical versus
+The repeat local real-clock benchmark measured 2502.6 → 10006.3 ms on the positive
+Smart Turn path, and 4002.2 → 12002.2 ms on fallback. These compare historical versus
 current timer settings; the conversational feature itself does not reduce those
 timers or add an LLM call to grading. Live STT/LLM/TTS and browser audibility remain
 unmeasured. Use the timestamped diagnostic events to measure your session.

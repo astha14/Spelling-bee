@@ -15,7 +15,7 @@ async def measure(label, settings, smart):
 
     async def submit(token):
         if controller.claim(token):
-            timings['speech_end_to_confirmation_prompt_ms'] = round(
+            timings['speech_end_to_validation_ms'] = round(
                 (time.monotonic() - controller.last_speech) * 1000, 1)
             done.set()
 
@@ -29,7 +29,7 @@ async def measure(label, settings, smart):
     controller.speech_stopped()
     controller.smart_result(controller.token, smart)
     try:
-        await asyncio.wait_for(done.wait(), 10)
+        await asyncio.wait_for(done.wait(), 20)
     finally:
         await controller.close()
     return {'scenario': label, **timings}

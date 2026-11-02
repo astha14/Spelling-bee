@@ -220,7 +220,7 @@ def test_real_async_timer_runs_once_and_close_cancels():
 
 
 @pytest.mark.parametrize("changes", [
-    {"vad_stop": 0}, {"vad_confidence": 2}, {"minimum_silence": 6},
+    {"vad_stop": 0}, {"vad_confidence": 2}, {"minimum_silence": 13},
     {"maximum_timeout": 1}, {"stt_final_wait": -1}, {"completion_timeout": float("nan")},
 ])
 def test_invalid_settings_fail_early(changes):
@@ -262,13 +262,11 @@ def test_revised_partials_only_final_appended_and_auto_grades(monkeypatch):
         clock.advance(.5)
         await send(VADUserStoppedSpeakingFrame())
         token = processor.completion.token
-        clock.advance(5)
+        clock.advance(13)
         await processor.completion_due(token)
         await processor.completion_due(token)
-        assert host.game.index == 0
-        assert host.phase == Phase.CONFIRMING_ANSWER
-        await processor.respond("yes")
         assert host.game.index == 1
+        assert host.phase == Phase.SPELLING
         assert host.game.results[0]["answer"] == "BPP"
         assert host.game.score == 0
         assert host.phase == Phase.SPELLING
@@ -296,10 +294,8 @@ def test_ten_automatic_rounds_and_replay_no_completion_phrase(monkeypatch):
             clock.advance(.5)
             await p.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
             token = p.completion.token
-            clock.advance(5)
+            clock.advance(13)
             await p.completion_due(token)
-            assert host.phase == Phase.CONFIRMING_ANSWER
-            await p.respond("yes")
             assert host.game.index == index + 1
             assert host.game.score == (index + 1) * 10
         assert host.phase == Phase.GAME_OVER
@@ -351,10 +347,8 @@ def test_corrected_buffer_completes_after_host_response_without_more_speech(monk
         token = p.completion.token
         clock.advance(1)
         assert p.completion.due(token) is None
-        clock.advance(4)
+        clock.advance(13)
         await p.completion_due(token)
-        assert host.phase == Phase.CONFIRMING_ANSWER
-        await p.respond("yes")
         assert host.game.results[0]["answer"] == "BD"
         await p.completion.close()
     asyncio.run(scenario())
@@ -383,7 +377,7 @@ def test_unclear_segment_does_not_interrupt_or_discard_following_letters(monkeyp
         assert not p.speaking
         clock.advance(.5)
         await send(VADUserStoppedSpeakingFrame())
-        clock.advance(5)
+        clock.advance(13)
         await p.completion_due(p.completion.token)
         assert h.game.index == 0  # Unknown segment cannot be silently omitted.
         assert "missed part" in p.push_frame.call_args.args[0].text
@@ -396,10 +390,8 @@ def test_unclear_segment_does_not_interrupt_or_discard_following_letters(monkeyp
         await p.accept_transcript("B E A U T I F U L")
         clock.advance(.5)
         await send(VADUserStoppedSpeakingFrame())
-        clock.advance(5)
+        clock.advance(13)
         await p.completion_due(p.completion.token)
-        assert h.phase == Phase.CONFIRMING_ANSWER
-        await p.respond("yes")
         assert h.game.index == 1
         assert h.game.results[0]["answer"] == "BEAUTIFUL"
         await p.completion.close()
@@ -463,14 +455,14 @@ def test_queued_final_rejected_after_host_playback():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('smart, delay', [(True, 5.0), (False, 5.0)])
-def test_fast_defaults_shorten_actual_silence_deadline(smart, delay):
+@pytest.mark.parametrize('smart, delay', [(True, 10.0), (False, 12.0)])
+def test_configured_silence_deadline_is_used(smart, delay):
     async def scenario():
         c, clock, submitted = setup_controller()
         c.settings = CompletionSettings()
         segment(c, clock, 'ELEFANT')
         c.smart_result(c.token, smart)
-        assert c.deadline() - c.last_speech == pytest.approx(5.0)
+        assert c.deadline() - c.last_speech == pytest.approx(delay)
         clock.advance(delay)
         await c.on_due(c.token)
         assert submitted == ['ELEFANT']  # No expected-word or length shortcut.
@@ -489,7 +481,7 @@ def test_observed_pauses_extend_fast_window_and_survive_new_word():
         c.final('EL')
         c.speech_stopped()
         c.smart_result(c.token, True)
-        assert c.deadline() - c.last_speech == pytest.approx(5.0)
+        assert c.deadline() - c.last_speech == pytest.approx(10.0)
         clock.advance(1.5)
         assert c.due(c.token) is None
         assert submitted == []
@@ -497,7 +489,7 @@ def test_observed_pauses_extend_fast_window_and_survive_new_word():
         c.listen()
         segment(c, clock, 'B')
         c.smart_result(c.token, True)
-        assert c.deadline() - c.last_speech == pytest.approx(5.0)
+        assert c.deadline() - c.last_speech == pytest.approx(10.0)
         await c.close()
     asyncio.run(scenario())
 
@@ -522,10 +514,8 @@ def test_grouped_letter_finals_across_pauses_do_not_force_retry():
             clock.advance(.8)
         assert host.letters == 'ELEPHANT'
         assert not p.completion.unclear_segment
-        clock.advance(6)
+        clock.advance(13)
         await p.completion_due(p.completion.token)
-        assert host.phase == Phase.CONFIRMING_ANSWER
-        await p.respond('yes')
         assert host.game.results[0]['answer'] == 'ELEPHANT'
         assert host.game.index == 1
         await p.completion.close()
@@ -561,10 +551,8 @@ def test_apple_segments_revised_partials_and_duplicate_frames(segments):
             assert p.completion.attempt_id == attempt
             assert host.game.index == 0
         assert host.letters == 'APPLE'
-        clock.advance(6)
+        clock.advance(13)
         await p.completion_due(p.completion.token)
-        assert host.phase == Phase.CONFIRMING_ANSWER
-        await p.respond('yes')
         assert host.game.results[0]['answer'] == 'APPLE'
         assert host.game.index == 1
         await p.completion.close()
@@ -596,7 +584,7 @@ def test_frog_pause_tolerance_is_explicit(gap, slow):
         if slow or gap <= 3:
             assert c.letters == 'FROG'
             assert not submitted
-            clock.advance(5)
+            clock.advance(13)
             await c.on_due(c.token)
             assert submitted == ['FROG']
         else:

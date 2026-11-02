@@ -142,8 +142,8 @@ class SpellingCompletion:
             return None
         delay = (self.settings.completion_timeout if self.smart_complete
                  else self.settings.maximum_timeout)
-        # Slower observed spelling extends the window; fast spelling avoids the
-        # old unconditional four-second fallback. Never use the expected answer.
+        # Extend silence when this session shows a slower spelling pace.
+        # Never consult the expected answer or word length.
         pace_delay = min(self.settings.adaptive_maximum,
                          self.longest_pause + self.settings.pause_margin) if self.longest_pause else 0
         delay = max(self.settings.minimum_silence, delay, pace_delay)
@@ -160,8 +160,8 @@ class SpellingCompletion:
             return "recognition_timeout"
         if self.unclear_segment:
             return "clarify"
-        # This means the silence window elapsed. The game processor turns it
-        # into a confirmation prompt; it does not grade or advance a round.
+        # This means the silence window elapsed; the game processor atomically
+        # claims and grades the accumulated player letters.
         return "submit" if self.letters else None
 
     def claim(self, token):

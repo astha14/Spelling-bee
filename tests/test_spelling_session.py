@@ -1,6 +1,7 @@
-"""Stage 1 integration checks for pause-safe, player-confirmed spelling."""
+"""Stage 1 integration checks for pause-safe automatic spelling."""
 import asyncio
 from unittest.mock import AsyncMock, Mock
+import pytest
 
 from backend.bot import GameProcessor
 from backend.completion import SpellingCompletion
@@ -55,22 +56,20 @@ def test_paused_spelling_accumulates_and_wrong_letter_is_not_repaired():
     asyncio.run(scenario())
 
 
-def test_three_second_pause_preserves_letters_and_silence_only_asks():
+@pytest.mark.parametrize("pause", [3, 8])
+def test_multi_second_pause_preserves_letters_and_autogrades_after_idle(pause):
     async def scenario():
         host, processor, clock = ready()
         await say_segment(host, processor, clock, "F R")
         token = processor.completion.token
-        clock.advance(3)
+        clock.advance(pause)
         assert processor.completion.due(token) is None
         await say_segment(host, processor, clock, "O G")
-        clock.advance(6)
+        clock.advance(13)
         assert processor.completion.due(processor.completion.token) == "submit"
         await processor.completion_due(processor.completion.token)
-        assert host.letters == "FROG"
-        assert host.phase == Phase.CONFIRMING_ANSWER
-        assert host.game.index == host.game.score == 0
-        await processor.respond("yes")
         assert host.game.results[0]["answer"] == "FROG"
+        assert host.game.index == 1
         assert host.game.score == 10
         await processor.completion.close()
     asyncio.run(scenario())
@@ -109,7 +108,7 @@ def test_ambiguous_letter_waits_for_clarification_and_keeps_prefix():
         host, processor, clock = ready()
         await say_segment(host, processor, clock, "F R O")
         await say_segment(host, processor, clock, "B or D")
-        clock.advance(6)
+        clock.advance(13)
         await processor.completion_due(processor.completion.token)
         assert "B or D" in processor.push_frame.call_args.args[0].text
         assert host.letters == "FRO"
@@ -126,7 +125,7 @@ def test_repeated_unclear_letter_is_inserted_before_later_letters():
         await processor.respond("unclear audio")
         await processor.respond("G")
         processor.completion.speech_stopped()
-        clock.advance(6)
+        clock.advance(13)
         await processor.completion_due(processor.completion.token)
         assert host.letters == "FRG"
         await processor.process_frame(BotStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)

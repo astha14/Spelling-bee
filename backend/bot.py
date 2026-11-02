@@ -232,13 +232,16 @@ class GameProcessor(FrameProcessor):
                 return
             if outcome != "submit":
                 return
-            if self.host.phase != Phase.SPELLING:
+            if self.host.phase != Phase.SPELLING or not self.completion.claim(token):
                 return
-            # Silence requests confirmation; only the player's confirmation
-            # can submit an answer to the deterministic grader.
-            self.completion.blocked = True
-            self.completion.pause()
-            speech = self.host.request_confirmation()
+            self.feedback_trace = (self.completion.attempt_id,
+                                   self.completion.last_speech,
+                                   self.completion.clock())
+            speech = self.host.complete_automatically()
+            self.trace_feedback("VALIDATION finished")
+            self.completion.state = CompletionState.FEEDBACK
+            self.completion.debug("VALIDATION completed", correct=self.host.game.results[-1]["correct"])
+            self.sync_attempt()
             self.publish()
             await self.deliver(speech)
 

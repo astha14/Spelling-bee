@@ -75,12 +75,6 @@ def test_real_webrtc_commands_and_shutdown(monkeypatch):
             await asyncio.sleep(.01)
             await stt_instances[0].push_frame(VADUserStoppedSpeakingFrame())
             async with asyncio.timeout(5):
-                while states[-1].get('phase') != 'CONFIRMING_ANSWER':
-                    await asyncio.sleep(.01)
-            assert states[-1].get('question') == 1
-            assert states[-1].get('score') == 0
-            await stt_instances[0].push_frame(TranscriptionFrame('yes', 'player', ''))
-            async with asyncio.timeout(5):
                 while states[-1].get('question') != 2:
                     await asyncio.sleep(.01)
             assert states[-1]['score'] == 0
