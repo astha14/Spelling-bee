@@ -33,8 +33,9 @@ class CartesiaSTTService(BaseCartesiaSTTService):
 
     async def _on_transcript(self, data):
         text = data.get('text', '')
-        self.report('STT provider final' if data.get('is_final') else 'STT provider partial',
-                    characters=len(text), empty=not text.strip())
+        self.report('STT provider transcript', text=text,
+                    is_final=bool(data.get('is_final')), confidence=data.get('confidence'),
+                    empty=not text.strip())
         await super()._on_transcript(data)
 
     async def _process_response(self, data):

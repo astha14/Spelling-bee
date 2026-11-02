@@ -32,7 +32,6 @@ class SpellingCompletion:
         self.generation = 0
         # Keep the player's observed pace across words, not across audio sessions.
         self.longest_pause = 0.0
-        self.expected_word = ""
         self.letters = ""
         self.state = CompletionState.WAITING_FOR_WORD
         self.speaking = False
@@ -44,6 +43,7 @@ class SpellingCompletion:
         self.submitted = False
         self.blocked = False
         self.unclear_segment = False
+        self.clarification_requested = False
 
     def debug(self, event, **fields):
         if self.settings.debug:
@@ -64,14 +64,14 @@ class SpellingCompletion:
             task.cancel()
             self.debug("TIMER cancelled")
 
-    def begin(self, expected_word):
+    def begin(self, _expected_word=None):
         self.pause()
         self.attempt_id = uuid4().hex
-        self.expected_word = expected_word
         self.letters = ""
         self.last_speech = None
         self.submitted = self.blocked = False
         self.unclear_segment = False
+        self.clarification_requested = False
 
     def pause(self):
         self.cancel_timer()
@@ -85,6 +85,8 @@ class SpellingCompletion:
         if not self.submitted:
             self.state = CompletionState.LISTENING
             self.listening_since = self.clock()
+            if self.letters and self.last_speech is None:
+                self.last_speech = self.listening_since
             # Retained/corrected letters can complete after a command response.
             # Fresh VAD is still required to accept additional STT text.
             self.schedule()
@@ -158,6 +160,8 @@ class SpellingCompletion:
             return "recognition_timeout"
         if self.unclear_segment:
             return "clarify"
+        # This means the silence window elapsed. The game processor turns it
+        # into a confirmation prompt; it does not grade or advance a round.
         return "submit" if self.letters else None
 
     def claim(self, token):

@@ -130,14 +130,24 @@ class Host:
             self.transition(Phase.SPELLING)
             return "Your letters are: " + ", ".join(self.letters) + ". Continue spelling when ready."
         if self.phase == Phase.CONFIRMING_ANSWER:
-            if command != "confirm":
-                return "Say confirm to grade, or let me try again to change your spelling."
-            return self.validate_answer(self.pending)
+            if command == "confirm":
+                return self.validate_answer(self.pending)
+            if command in {"clear", "undo", "replace_last"} or parsed.letters or parsed.corrections:
+                self.letters = self.pending or ""
+                self.pending = None
+                self.transition(Phase.SPELLING)
+            else:
+                return "Take your time. You can continue spelling, or say yes if that is your final answer."
         if command == "confirm":
             return "Spell your answer first. I will wait for you to finish."
         if not action and parsed.uncertain and not parsed.letters:
             return "I couldn't identify clear letters. Please repeat that part, or say B for bravo. Your answer is unchanged."
-        if parsed.letters:
+        if parsed.corrections:
+            for operation, value in parsed.corrections:
+                if operation == "replace" and self.letters:
+                    self.letters = self.letters[:-1]
+                self.letters += value
+        elif parsed.letters:
             self.letters += parsed.letters
         if command == "submit":
             if not self.letters:
@@ -146,6 +156,14 @@ class Host:
             self.transition(Phase.CONFIRMING_ANSWER)
             return "I heard: " + ", ".join(self.letters) + ". Say confirm to grade, or let me try again."
         return ""
+
+    def request_confirmation(self):
+        """Ask before validating; silence itself never changes game state."""
+        if self.phase != Phase.SPELLING or not self.letters:
+            return ""
+        self.pending = self.letters
+        self.transition(Phase.CONFIRMING_ANSWER)
+        return "Was that your final spelling? Say yes to submit it, or keep spelling to make a change."
 
 
     def chat(self, intent, reply=""):

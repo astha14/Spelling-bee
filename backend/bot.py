@@ -45,6 +45,8 @@ class GameProcessor(FrameProcessor):
         self.final_id_order = deque()
         self.feedback_trace = None
         self.conversation_task = None
+        self.ambiguous_choice = False
+        self.unclear_position = None
 
     @property
     def transcript_token(self):
@@ -59,7 +61,7 @@ class GameProcessor(FrameProcessor):
         key = (id(self.host.game), self.host.game.index)
         if self.host.phase == Phase.SPELLING and not self.host.paused:
             if key != self.word_key or reset:
-                self.completion.begin(self.host.game.current.text)
+                self.completion.begin()
                 self.word_key = key
                 if self.smart:
                     self.smart.reset_audio()
@@ -146,9 +148,16 @@ class GameProcessor(FrameProcessor):
             if not action and text.strip() and re.fullmatch(r"[\s.,!?;:…-]+", text):
                 return
             parsed = parse_spelling(text)
+            letters_before = self.host.letters
             routed = action or parsed.command or (local_intent(text) if not parsed.letters else None)
             if routed:
                 self.cancel_conversation()
+            confirming = self.host.phase == Phase.CONFIRMING_ANSWER and routed == "confirm"
+            previous_result_count = len(self.host.game.results)
+            if confirming:
+                submitted_at = self.completion.clock()
+                self.feedback_trace = (self.completion.attempt_id,
+                    self.completion.last_speech or submitted_at, submitted_at)
             if (self.host.phase != Phase.IDLE and not routed and not parsed.letters
                     and conversational_candidate(text)):
                 self.start_conversation(text)
@@ -160,18 +169,38 @@ class GameProcessor(FrameProcessor):
                 # Do not start TTS halfway through a spelling because one segment
                 # is unclear. Keep listening, then request a retry after silence.
                 self.sync_attempt()
+                self.ambiguous_choice = bool(re.fullmatch(
+                    r"(?:the letter )?[a-z] or [a-z]", text.strip().lower()))
+                self.unclear_position = len(self.host.letters)
                 self.completion.unclear_segment = True
                 self.completion.final(self.host.letters)
                 self.completion.debug("STT unclear segment; waiting for silence")
                 return
             speech = self.host.handle(text, routed)
+            if confirming and len(self.host.game.results) > previous_result_count:
+                result = self.host.game.results[-1]
+                self.completion.debug("VALIDATION completed", correct=result["correct"],
+                                      answer=result["answer"])
             self.sync_attempt(reset=(action or parsed.command) == "clear")
             if self.host.phase == Phase.SPELLING:
                 if not routed and parsed.uncertain and not parsed.letters:
                     self.completion.blocked = True
-                elif parsed.letters:
+                elif ((parsed.letters or parsed.corrections)
+                      and self.completion.clarification_requested):
+                    # Insert the repeated unclear segment where it was heard,
+                    # ahead of any later letters already collected.
+                    if parsed.letters and self.unclear_position is not None:
+                        base = self.host.letters[:-len(parsed.letters)]
+                        prefix = base[:self.unclear_position]
+                        suffix = base[self.unclear_position:]
+                        self.host.letters = prefix + parsed.letters + suffix
+                    self.unclear_position = None
                     self.completion.blocked = False
+                    self.completion.unclear_segment = False
+                    self.completion.clarification_requested = False
                 self.completion.final(self.host.letters)
+            self.completion.debug("GAME state transition", phase=self.host.phase.value,
+                                  round=self.host.game.index + 1, score=self.host.game.score)
             self.publish()
             await self.deliver(speech)
 
@@ -182,10 +211,18 @@ class GameProcessor(FrameProcessor):
     async def completion_due(self, token):
         async with self.lock:
             outcome = self.completion.due(token)
+            self.completion.debug("ANSWER completion decision", outcome=outcome,
+                                  letters=self.host.letters)
             if outcome == "clarify":
                 self.completion.blocked = True
                 self.completion.pause()
-                await self.deliver("I missed part of that spelling. Please say let me try again, then spell each letter. You can say B for bravo for a tricky letter.")
+                ambiguous = self.ambiguous_choice
+                speech = ("I heard two possible letters. Was that B or D?" if ambiguous
+                          else "I missed part of that spelling. Could you repeat just that letter? Your earlier letters are saved.")
+                self.ambiguous_choice = False
+                self.completion.clarification_requested = True
+                self.completion.debug("CLARIFICATION requested", alternatives=ambiguous)
+                await self.deliver(speech)
                 return
             if outcome == "recognition_timeout":
                 self.completion.blocked = True
@@ -193,16 +230,15 @@ class GameProcessor(FrameProcessor):
                 self.publish(notice="Recognition is incomplete. Please retry your spelling.")
                 await self.deliver("I didn't receive all the final letters. Please say let me try again and spell once more.")
                 return
-            if self.host.phase != Phase.SPELLING or not self.completion.claim(token):
+            if outcome != "submit":
                 return
-            self.feedback_trace = (self.completion.attempt_id,
-                                   self.completion.last_speech,
-                                   self.completion.clock())
-            speech = self.host.complete_automatically()
-            self.trace_feedback("VALIDATION finished")
-            self.completion.state = CompletionState.FEEDBACK
-            self.completion.debug("VALIDATION completed", correct=self.host.game.results[-1]["correct"])
-            self.sync_attempt()
+            if self.host.phase != Phase.SPELLING:
+                return
+            # Silence requests confirmation; only the player's confirmation
+            # can submit an answer to the deterministic grader.
+            self.completion.blocked = True
+            self.completion.pause()
+            speech = self.host.request_confirmation()
             self.publish()
             await self.deliver(speech)
 
@@ -246,6 +282,7 @@ class GameProcessor(FrameProcessor):
             async with self.lock:
                 self.cancel_conversation()
                 self.user_speaking = True
+                self.completion.blocked = False
                 self.heard_user = True
                 self.overlapping_speech = self.speaking
                 self.last_input = time.monotonic()
@@ -278,13 +315,14 @@ class GameProcessor(FrameProcessor):
             self.completion.pause()
             self.publish(error="Voice service error. Check backend logs and API settings; reconnect to retry.")
         if isinstance(frame, InterimTranscriptionFrame):
-            self.completion.debug("STT partial arrival", characters=len(frame.text))
+            self.completion.debug("STT interim transcript", transcript=frame.text)
             async with self.lock:
                 if not self.speaking:
                     self.completion.interim()
             return  # Revised partials never append letters.
         if isinstance(frame, TranscriptionFrame):
-            self.completion.debug("STT final arrival", characters=len(frame.text))
+            self.completion.debug("STT final transcript", transcript=frame.text,
+                                  confidence=(frame.result or {}).get("confidence"))
             if self.duplicate_final(frame):
                 self.completion.debug("STT duplicate frame ignored")
                 return

@@ -15,7 +15,7 @@ async def measure(label, settings, smart):
 
     async def submit(token):
         if controller.claim(token):
-            timings['speech_end_to_submit_ms'] = round(
+            timings['speech_end_to_confirmation_prompt_ms'] = round(
                 (time.monotonic() - controller.last_speech) * 1000, 1)
             done.set()
 
@@ -39,10 +39,10 @@ async def main():
     old = CompletionSettings(completion_timeout=2.5, maximum_timeout=4.0)
     new = CompletionSettings()
     results = await asyncio.gather(
-        measure('before: Smart Turn complete', old, True),
-        measure('after: Smart Turn complete', new, True),
-        measure('before: fallback', old, False),
-        measure('after: fallback', new, False),
+        measure('previous: Smart Turn complete', old, True),
+        measure('current: Smart Turn complete', new, True),
+        measure('previous: fallback', old, False),
+        measure('current: fallback', new, False),
     )
     print(json.dumps(results, indent=2))
 

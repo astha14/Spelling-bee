@@ -46,12 +46,27 @@ class Parsed:
     command: str | None = None
     uncertain: bool = False
     replacement: str | None = None
+    corrections: tuple = ()
 
 
 def parse_spelling(text: str) -> Parsed:
     original = text.strip().replace("’", "'")
     clean = original.lower()
     clean = re.sub(r"[.!?,]+$", "", clean)
+    if re.search(r"\b(?:what was the word|repeat|say it again|hear it again)\b", clean) and re.search(r"\bword\b", clean):
+        return Parsed(command="repeat")
+    # "F R O, wait, I meant A G" replaces the last heard letter, then
+    # retains any letters that followed the correction.
+    correction = re.fullmatch(r"(.+?)\s+(?:wait\s*,?\s*|no\s*,?\s*|sorry\s*,?\s*)?(?:i meant|i said|make that)\s+(.+)", clean)
+    if correction:
+        before = parse_spelling(correction[1])
+        after = parse_spelling(correction[2])
+        if before.letters and after.letters and not (before.uncertain or after.uncertain):
+            return Parsed(corrections=(("append", before.letters), ("replace", after.letters[:1]), ("append", after.letters[1:])))
+        return Parsed(uncertain=True)
+    # Explicit alternatives are ambiguous evidence, not a spelling guess.
+    if re.fullmatch(r"(?:the letter )?[a-z] or [a-z]", clean):
+        return Parsed(uncertain=True)
     for command, phrases in COMMANDS.items():
         if clean in phrases:
             return Parsed(command=command)

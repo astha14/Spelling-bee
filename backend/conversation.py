@@ -16,7 +16,7 @@ def local_intent(text):
     if re.search(r'\b(?:for|as in|last letter)\b', clean):
         return None
     if (re.search(r'\b(nervous|anxious|scared|difficult|struggling|frustrated)\b', clean)
-            or re.search(r'\bthis (?:is|sounds|seems) (?:hard|tough)\b', clean)):
+            or re.search(r'\bthis (?:word )?(?:is|sounds|seems) (?:really )?(?:hard|tough|difficult)\b', clean)):
         return 'nervous'
     if clean in {"okay let me try", "okay, let me try", "okay let's try", "okay, let's try", "let's try", "i'm ready to spell"}:
         return 'resume'
